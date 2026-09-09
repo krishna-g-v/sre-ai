@@ -1,0 +1,11 @@
+# Local dev secrets — never commit
+.env
+.env.local
+docker-compose/.env
+docker-compose/.env.local
+
+# Terraform local state/cache (real state should live in a remote backend, not here)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/*.tfvars
