@@ -1,0 +1,28 @@
+# Local dev secrets — never commit
+.env
+.env.local
+infra/docker-compose/.env
+infra/docker-compose/.env.local
+
+# Terraform local state/cache (real state should live in a remote backend, not here)
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/*.tfvars
+
+# Backend (Python)
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/.pytest_cache/
+backend/.ruff_cache/
+
+# Frontend (Node)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Embedding model weights (large binary, baked into Docker image at build time —
+# not vendored into the repo; see docs/06-deployment-and-environments.md §2a)
+backend/models/
