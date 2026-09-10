@@ -1,0 +1,11 @@
+# Local-dev-only file — vite build picks up .env automatically and would otherwise
+# bake VITE_API_BASE_URL=http://localhost:8000 into the production bundle, breaking
+# the same-origin /api proxy that server.ts relies on in prod (see api/client.ts).
+.env
+.env.local
+.env.*.local
+
+node_modules
+dist
+dist-ssr
+.git

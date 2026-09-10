@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: sreagent
+      POSTGRES_PASSWORD: sreagent
+      POSTGRES_DB: sreagent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sreagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../../backend
+      secrets:
+        - hf_token
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://sreagent:sreagent@postgres:5432/sreagent
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../../frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      # Vite's dependency pre-bundle cache (node_modules/.vite) doesn't exist in the
+      # built image — `npm install` at build time doesn't create it, only the dev
+      # server does, lazily, on first request. Without this volume, every
+      # `--force-recreate`/rebuild starts from a brand new container and pays that
+      # cold esbuild pre-bundle cost again on the first page load (blank page while
+      # it runs). Persisting it here means that cost is paid once, not on every
+      # restart.
+      - frontend_vite_cache:/app/node_modules/.vite
+    depends_on:
+      - backend
+
+secrets:
+  hf_token:
+    environment: HUGGING_FACE_TOKEN
+
+volumes:
+  postgres_data:
+  frontend_vite_cache:

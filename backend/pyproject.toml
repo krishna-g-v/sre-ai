@@ -1,0 +1,16 @@
+[project]
+name = "sre-ai-backend"
+version = "0.1.0"
+description = "SRE Agent backend — FastAPI + LangGraph"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: live end-to-end tests against a running backend + real Postgres + real LLM. Slow, costs real LLM calls, and inherently non-deterministic (it's testing an LLM) — never run by default, only on demand: `pytest -m e2e`. See tests/e2e/README.md.",
+]
+# Bare `pytest` skips e2e tests entirely — `-m e2e` on the command line overrides this
+# (pytest applies addopts then CLI args in one combined pass; the explicit -m wins).
+addopts = "-m 'not e2e'"
