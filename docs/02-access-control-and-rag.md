@@ -47,6 +47,15 @@ best_effort_target_size: "small" | "medium" | "large"   # only meaningful when s
 - **`whole_document`**: the entire parsed document text becomes a single `kb.chunks` row (`chunk_type = whole_document`). Best suited to the common case here (short docs, large-context model) — retrieval can hand the model the complete document when it's the relevant one, with no risk of losing context via a bad split.
 - **`best_effort`**: the document is split into multiple chunks sized approximately to the chosen qualitative target (`small`/`medium`/`large`), snapped to the nearest natural boundary. Better suited to longer documents, or documents made of many loosely-related sections where whole-document retrieval would pull in a lot of irrelevant text for a narrow query.
 
+### 3a. Optional LLM-based Markdown conversion (2026-09-11)
+
+A per-upload checkbox ("Convert to Markdown before ingesting" — [[04-frontend-ui]]'s upload dialog) runs *before* the chunking step above: `app/services/markdown_conversion.py` sends the raw extracted text (from `app/services/parsing.py::extract_text`) through the same chat LLM with an instruction to rewrite it as clean, structured Markdown — headings, lists, tables, code blocks reconstructed from the source's implied structure, extraction artifacts (broken line wraps, repeated page headers/footers) removed — with an explicit "preserve all information, this is reformatting not summarizing" constraint. The resulting Markdown is what actually gets chunked/embedded, not the raw extraction.
+
+- **Why**: raw PDF/DOCX extraction is often noisy (broken paragraphs, repeated boilerplate, no real structure) — cleaner Markdown structure is expected to both retrieve more accurately and cost fewer tokens per chunk than the raw noise it replaces (the user's own reasoning for requesting this).
+- **Scope**: only applies to non-Markdown uploads (`content_type != "md"`) — an already-Markdown file has nothing to convert, the checkbox is disabled for it in the UI.
+- **Failure handling**: a conversion failure (LLM error, empty response) falls back to ingesting the original extracted text unchanged, exactly as if the checkbox had been left unchecked — a Markdown-conversion problem must never fail the whole upload. `kb.documents.converted_to_markdown` (boolean) reflects whether conversion actually succeeded, not just whether it was requested, so this is visible/auditable per document (shown as a badge in the Knowledge Base UI) rather than silently degrading.
+- **Cost/latency**: one additional whole-document LLM call per upload when checked — same context-window assumption already recorded above for whole-document chunking (short internal docs, not book-length manuals).
+
 **Configuration scope** (decision recorded in [[00-overview]]): a system-wide default (set in an ingestion settings screen — see [[04-frontend-ui]]) applies to new uploads, with an explicit per-document override available at upload time for the person doing the upload.
 
 ## 4. Retrieval must mix chunk types and documents — not default to "summarize the whole doc"

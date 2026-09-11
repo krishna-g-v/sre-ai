@@ -8,6 +8,7 @@ import DashboardPage from "./pages/DashboardPage";
 import AlertsPage from "./pages/AlertsPage";
 import AgentsPage from "./pages/AgentsPage";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage";
+import SettingsPage from "./pages/SettingsPage";
 import AdminPage from "./pages/AdminPage";
 
 function RequireAuth({ children }: { children: ReactElement }) {
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/knowledge-base" element={<KnowledgeBasePage />} />
         <Route path="/chat" element={<ChatPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route
           path="/admin"
           element={

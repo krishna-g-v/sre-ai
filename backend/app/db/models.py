@@ -71,12 +71,62 @@ class UserGroupMembership(Base):
 
 
 class IntegrationScope(Base):
+    """`config` (JSONB) shape depends on `integration_type` — see
+    docs/03-agent-and-integrations.md §4 and docs/09-ops-runbook-and-proactive-monitoring.md
+    §2. For AWS-backed types (`aws_cloudwatch`, `eks`, and any added later — `ecr`,
+    `aws_network`, `rds`), `config` additionally carries `role_arn` / `external_id` /
+    `region` for cross-account access via STS AssumeRole (app/services/aws_session.py);
+    omitting `role_arn` falls back to the backend's own ambient credentials. `eks`-type
+    scopes are one row per cluster (`config.cluster_name`), matching every other
+    integration_type's "one row per resource" convention.
+    """
+
     __tablename__ = "integration_scope"
 
     id: Mapped[uuid.UUID] = uuid_pk()
     group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
     integration_type: Mapped[str] = mapped_column(String(50), nullable=False)  # aws_cloudwatch | eks | grafana | prometheus
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class UserAwsAccount(Base):
+    """A personal AWS account/role a user has registered for themselves via the Settings
+    page (docs/10-nl-to-cli-execution.md §9) — used only by the NL-to-CLI pipeline
+    (app/services/cli_executor.py, app/agents/cli_agent.py), not by the hand-written
+    tools in app/agents/live_ops_agents.py, which stay on the admin-provisioned,
+    group-scoped `IntegrationScope` model above. Deliberately separate: the point of
+    this table is letting an engineer self-service register an AWS account they
+    personally administer without needing a superuser to provision a group-wide scope
+    first. Nothing here is shared with or visible to any other user, including
+    superusers — there is no admin view of other users' rows, by design.
+
+    `role_arn`/`external_id` are used for STS AssumeRole (app/services/aws_session.py)
+    exactly as before. `access_key_id`/`secret_access_key` are an explicit, deliberate
+    exception to "no AWS secret ever lives in this app" — added per user request
+    (2026-09-10) so each user can supply their own base identity to assume their role
+    with, instead of relying on one shared, centrally-configured base identity in the
+    backend's own environment. Both are optional: an account with neither set falls
+    back to that shared base identity, unchanged from the original design. When set,
+    `secret_access_key` is write-only from the API's perspective — `UserAwsAccountOut`
+    never returns it once saved (app/api/routes/user_settings.py) — but it IS stored in
+    plaintext in this table, same as `password` on `User` (see docs/05-auth-and-users.md
+    — hashing/encryption is v1-deferred there too). Flagged here so this is a conscious,
+    documented tradeoff, not a silent regression: see docs/10-nl-to-cli-execution.md §9.
+    """
+
+    __tablename__ = "user_aws_accounts"
+    __table_args__ = (UniqueConstraint("user_id", "label", name="uq_user_aws_accounts_user_label"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    role_arn: Mapped[str] = mapped_column(String(500), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    region: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    access_key_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    secret_access_key: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +154,13 @@ class Document(Base):
 
     chunk_strategy: Mapped[str] = mapped_column(String(20), nullable=False, default="whole_document")
     best_effort_target_size: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # Whether an LLM rewrote the extracted text as Markdown before chunking/embedding
+    # (app/services/markdown_conversion.py) — requested at upload time via
+    # `convert_to_markdown`, but this reflects whether it actually succeeded, not just
+    # whether it was requested: a conversion failure falls back to the raw extracted
+    # text rather than failing the upload, and this stays False in that case.
+    converted_to_markdown: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
 

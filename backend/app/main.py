@@ -4,7 +4,18 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.api.routes import admin, agents, alerts, auth, chat, documents, groups, health, stats
+from app.api.routes import (
+    admin,
+    agents,
+    alerts,
+    auth,
+    chat,
+    documents,
+    groups,
+    health,
+    stats,
+    user_settings,
+)
 from app.core.config import get_settings
 from app.db.models import User
 from app.db.session import SessionLocal
@@ -15,7 +26,9 @@ def _ensure_bootstrap_admin() -> None:
     settings = get_settings()
     db = SessionLocal()
     try:
-        existing_superuser = db.execute(select(User).where(User.is_superuser.is_(True))).first()
+        existing_superuser = db.execute(
+            select(User).where(User.is_superuser.is_(True))
+        ).first()
         if existing_superuser is not None:
             return
 
@@ -51,7 +64,9 @@ app = FastAPI(title="SRE Agent API", lifespan=lifespan)
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()],
+    allow_origins=[
+        o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +80,17 @@ app.include_router(health.router)
 # same-origin /api/* requests to this backend (see frontend/server.ts), so the whole API
 # needs to live under one consistent prefix rather than special-casing just health.
 api_router = APIRouter(prefix="/api")
-for router in (health.router, auth.router, documents.router, chat.router, admin.router, groups.router, agents.router, alerts.router, stats.router):
+for router in (
+    health.router,
+    auth.router,
+    documents.router,
+    chat.router,
+    admin.router,
+    groups.router,
+    agents.router,
+    alerts.router,
+    stats.router,
+    user_settings.router,
+):
     api_router.include_router(router)
 app.include_router(api_router)
