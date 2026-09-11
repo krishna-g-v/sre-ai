@@ -44,6 +44,7 @@ export interface DocumentOut {
   tags: string[];
   chunk_strategy: "whole_document" | "best_effort";
   best_effort_target_size: string | null;
+  converted_to_markdown: boolean;
 }
 
 export type AgentCategory = "Grafana" | "Synthetics" | "Prometheus" | "Kubernetes" | "CloudWatch" | "Custom";
@@ -135,4 +136,14 @@ export interface UserOut {
   display_name: string;
   is_superuser: boolean;
   group_ids: string[];
+}
+
+export interface UserAwsAccount {
+  id: string;
+  label: string;
+  account_id: string;
+  role_arn: string;
+  external_id: string;
+  region: string;
+  has_own_credentials: boolean;
 }

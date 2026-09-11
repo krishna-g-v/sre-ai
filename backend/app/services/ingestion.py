@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.db.models import Chunk, Document
 from app.services.chunking import chunk_text
 from app.services.embeddings import embed_documents
+from app.services.llm import get_llm
+from app.services.markdown_conversion import convert_to_markdown
 from app.services.parsing import extract_text, infer_content_type
 
 
@@ -21,6 +23,7 @@ def ingest_document(
     tags: list[str],
     chunk_strategy: str,
     best_effort_target_size: str | None,
+    convert_markdown: bool = False,
 ) -> Document:
     content_type = infer_content_type(filename)
 
@@ -42,6 +45,12 @@ def ingest_document(
 
     try:
         text = extract_text(content, content_type)
+        # Already markdown -> nothing to convert; a conversion failure falls back to
+        # the raw extraction rather than failing the whole upload (see
+        # markdown_conversion.py) — converted_to_markdown reflects what actually
+        # happened, not just what was requested.
+        if convert_markdown and content_type != "md":
+            text, document.converted_to_markdown = convert_to_markdown(text, get_llm())
         pieces = chunk_text(text, chunk_strategy, best_effort_target_size)
         chunk_type = "whole_document" if chunk_strategy == "whole_document" else "best_effort"
         vectors = embed_documents(pieces)

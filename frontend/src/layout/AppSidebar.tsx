@@ -4,6 +4,7 @@ import NotificationsIcon from "@mui/icons-material/NotificationsOutlined";
 import SmartToyIcon from "@mui/icons-material/SmartToyOutlined";
 import MenuBookIcon from "@mui/icons-material/MenuBookOutlined";
 import ChatIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
+import SettingsIcon from "@mui/icons-material/SettingsOutlined";
 import ShieldIcon from "@mui/icons-material/ShieldOutlined";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -22,6 +23,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/agents", label: "SRE Agent Studio", icon: <SmartToyIcon fontSize="small" /> },
   { path: "/knowledge-base", label: "Knowledge Base", icon: <MenuBookIcon fontSize="small" /> },
   { path: "/chat", label: "Assistant", icon: <ChatIcon fontSize="small" /> },
+  { path: "/settings", label: "My AWS Accounts", icon: <SettingsIcon fontSize="small" /> },
 ];
 
 interface Props {

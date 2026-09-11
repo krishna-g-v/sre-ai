@@ -2,11 +2,13 @@ import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   MenuItem,
@@ -23,6 +25,7 @@ import AddIcon from "@mui/icons-material/Add";
 import SearchIcon from "@mui/icons-material/Search";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
+import AutoFixHighOutlinedIcon from "@mui/icons-material/AutoFixHighOutlined";
 import { api } from "../api/client";
 import type { DocumentOut, GroupOut } from "../types/api";
 
@@ -39,8 +42,11 @@ export default function KnowledgeBasePage() {
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [tags, setTags] = useState("");
   const [chunkStrategy, setChunkStrategy] = useState<"whole_document" | "best_effort">("whole_document");
+  const [convertToMarkdown, setConvertToMarkdown] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const isMarkdownFile = !!file && /\.(md|markdown)$/i.test(file.name);
 
   const load = async () => setDocuments(await api.get<DocumentOut[]>("/documents"));
 
@@ -79,12 +85,14 @@ export default function KnowledgeBasePage() {
       form.append("group_ids", JSON.stringify(ownerScope === "group" ? selectedGroupIds : []));
       form.append("tags", JSON.stringify(tags.split(",").map((t) => t.trim()).filter(Boolean)));
       form.append("chunk_strategy", chunkStrategy);
+      form.append("convert_to_markdown", String(convertToMarkdown && !isMarkdownFile));
       await api.postForm("/documents", form);
       setUploadOpen(false);
       setFile(null);
       setDocTitle("");
       setTags("");
       setSelectedGroupIds([]);
+      setConvertToMarkdown(false);
       await load();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -152,9 +160,21 @@ export default function KnowledgeBasePage() {
               <Typography variant="subtitle2" fontWeight={700} noWrap>
                 {doc.title}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {doc.content_type.toUpperCase()} · {doc.chunk_strategy === "whole_document" ? "Whole document" : `Best effort (${doc.best_effort_target_size})`}
-              </Typography>
+              <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+                <Typography variant="caption" color="text.secondary">
+                  {doc.content_type.toUpperCase()} · {doc.chunk_strategy === "whole_document" ? "Whole document" : `Best effort (${doc.best_effort_target_size})`}
+                </Typography>
+                {doc.converted_to_markdown && (
+                  <Chip
+                    icon={<AutoFixHighOutlinedIcon sx={{ fontSize: 12 }} />}
+                    label="Markdown-converted"
+                    size="small"
+                    variant="outlined"
+                    color="primary"
+                    sx={{ height: 18, fontSize: 10 }}
+                  />
+                )}
+              </Stack>
 
               {doc.group_ids.length > 0 && (
                 <Stack direction="row" gap={0.5} flexWrap="wrap">
@@ -246,6 +266,29 @@ export default function KnowledgeBasePage() {
             </TextField>
 
             <TextField label="Tags (comma separated)" value={tags} onChange={(e) => setTags(e.target.value)} fullWidth placeholder="runbook, onboarding" />
+
+            <Box>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={convertToMarkdown}
+                    disabled={isMarkdownFile}
+                    onChange={(e) => setConvertToMarkdown(e.target.checked)}
+                  />
+                }
+                label={
+                  <Stack direction="row" alignItems="center" gap={0.75}>
+                    <AutoFixHighOutlinedIcon fontSize="small" color={convertToMarkdown ? "primary" : "disabled"} />
+                    <Typography variant="body2">Convert to Markdown before ingesting</Typography>
+                  </Stack>
+                }
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", pl: 4.5 }}>
+                {isMarkdownFile
+                  ? "This file is already Markdown — nothing to convert."
+                  : "Uses the LLM to rewrite the extracted content as clean, structured Markdown before chunking — usually improves retrieval accuracy and uses fewer tokens per answer. Adds a short delay to this upload."}
+              </Typography>
+            </Box>
 
             {uploadError && (
               <Typography variant="caption" color="error.main">

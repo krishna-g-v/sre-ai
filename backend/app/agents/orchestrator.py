@@ -17,9 +17,10 @@ import json
 import uuid
 from typing import Literal, TypedDict
 
+from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
-from langgraph.graph import StateGraph, END
 
+from app.agents.cli_agent import answer_with_generated_cli
 from app.agents.live_ops_agents import (
     cloudwatch_query_logs,
     grafana_get_active_alerts,
@@ -49,7 +50,14 @@ Use the conversation so far for context before deciding — a short message like
 or a one-word answer to a question the assistant just asked only makes sense in light of what
 was just discussed. If the newest message reads as a continuation of the topic already being
 discussed (answering the assistant's last question, naming something the assistant just asked
-about, a natural follow-up), classify it the same way as that ongoing topic.
+about, a natural follow-up), classify it the same way as that ongoing topic — including when
+that means "live_ops", not just "document_topic". Concretely: if the assistant's last turn ran
+a live investigation (listed clusters, pods, deployments, logs, metrics, alerts — anything
+about AWS/EKS/Grafana/Prometheus), a follow-up continuing that same investigation ("list the
+pods in <cluster the assistant just named>", "what about that namespace", "show me its logs")
+is "live_ops" too, even if the follow-up message itself doesn't repeat words like "pod" or
+"cluster". The "classify aggressively toward document_topic" instruction below is about
+default-when-genuinely-unclear, not about overriding an obvious live-ops continuation.
 
 - "general": ONLY a bare greeting, thanks, or goodbye and NOTHING else — "hi", "hello",
   "good morning", "thanks!", "bye". If the message does anything more than that, it is not
@@ -184,8 +192,35 @@ def build_orchestrator_graph(db: Session):
     def live_ops_node(state: OrchestratorState) -> OrchestratorState:
         group_ids = [uuid.UUID(g) for g in state["group_ids"]]
         message = state["query"]
-        results = []
         lowered = message.lower()
+
+        # Always try the per-user CLI pipeline (docs/10 §9) first — unconditionally,
+        # not gated on keywords. This node is only ever reached once the classifier
+        # has already decided the message is "live_ops" (see the conditional edges
+        # below), so a second keyword filter here is both redundant and actively
+        # harmful: found live that a natural follow-up like "which is the largest in
+        # size of those" (no "pod"/"cluster"/"eks"/etc. in it at all) correctly
+        # classified as live_ops but then got silently blocked from ever reaching the
+        # CLI generator by an earlier version of this gate, even though the generator
+        # itself resolves it perfectly given the conversation history. Falls through
+        # to the fixed tools below only if the CLI generator itself can't produce an
+        # answer, so a group that *does* have integration_scope configured (docs/09
+        # §3) still benefits from them.
+        generated_answer = answer_with_generated_cli(
+            db,
+            uuid.UUID(state["user_id"]),
+            message,
+            llm,
+            history=state.get("history", []),
+            group_ids=group_ids,
+            is_superuser=state.get("is_superuser", False),
+        )
+        if generated_answer is not None:
+            state["answer"] = generated_answer
+            state["retrieved_titles"] = []
+            return state
+
+        results = []
         if any(k in lowered for k in ("pod", "deployment", "namespace", "cluster", "kubectl", "eks")):
             results.append(("EKS/kubectl", k8s_get_pods(db, group_ids, "default")))
         if any(k in lowered for k in ("log", "cloudwatch")):
@@ -196,7 +231,17 @@ def build_orchestrator_graph(db: Session):
             results.append(("Prometheus", prometheus_instant_query(db, group_ids, message)))
 
         if not results:
-            results.append(("EKS/kubectl", k8s_get_pods(db, group_ids, "default")))
+            # Not AWS/EKS-flavored (so the CLI pipeline above never ran), or it did run
+            # and declined outright — say so plainly instead of silently substituting
+            # an unrelated tool's output (found via live testing to be actively
+            # misleading: e.g. a question like "how many EBS volumes" has nothing to
+            # do with EKS pods).
+            state["answer"] = (
+                "I wasn't able to work out a specific investigation command for that — "
+                "try naming the exact AWS/EKS resource or account, or rephrase the question."
+            )
+            state["retrieved_titles"] = []
+            return state
 
         tool_output = "\n\n".join(f"[{name}]\n{output}" for name, output in results)
         messages = [

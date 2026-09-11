@@ -4,17 +4,19 @@ All read-only by construction: no mutating call exists in this module for the LL
 invoke, and each function first checks the group's `integration_scope` config — an
 engineer only gets live data for clusters/accounts/dashboards their groups are scoped to.
 
-None of these have live credentials in this dev sandbox (no AWS account, EKS cluster,
-Grafana, or Prometheus wired up here), so they resolve to a clear "not configured"
-response rather than fabricating data — see docs/00-overview.md's advisory-only guardrail.
+AWS/EKS-backed tools go through `app/services/aws_session.py` (docs/09 §2) rather than
+calling `boto3`/`kubernetes` with ambient credentials directly, so a group whose scope
+has no `role_arn` for an account simply can't reach it. Tools with no matching
+`integration_scope` row resolve to a clear "not configured" response rather than
+fabricating data — see docs/00-overview.md's advisory-only guardrail.
 """
 
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import IntegrationScope
+from app.core.config import get_settings
+from app.services.integration_scopes import scopes_for as _scopes_for
 
 NOT_CONFIGURED_MSG = (
     "No {integration} integration is configured for your group(s) yet. "
@@ -22,30 +24,20 @@ NOT_CONFIGURED_MSG = (
 )
 
 
-def _scopes_for(db: Session, group_ids: list[uuid.UUID], integration_type: str) -> list[IntegrationScope]:
-    if not group_ids:
-        return []
-    stmt = select(IntegrationScope).where(
-        IntegrationScope.group_id.in_(group_ids),
-        IntegrationScope.integration_type == integration_type,
-    )
-    return list(db.execute(stmt).scalars().all())
-
-
 def cloudwatch_query_logs(db: Session, group_ids: list[uuid.UUID], query: str) -> str:
     scopes = _scopes_for(db, group_ids, "aws_cloudwatch")
     if not scopes:
         return NOT_CONFIGURED_MSG.format(integration="AWS CloudWatch")
 
-    import boto3
+    from app.services.aws_session import get_client
 
+    default_region = get_settings().aws_region
     lines: list[str] = []
     for scope in scopes:
         log_group = scope.config.get("log_group")
-        region = scope.config.get("region")
         if not log_group:
             continue
-        client = boto3.client("logs", region_name=region)
+        client = get_client(scope.config, "logs", default_region=default_region)
         response = client.filter_log_events(logGroupName=log_group, filterPattern=query, limit=20)
         lines.extend(e["message"] for e in response.get("events", []))
     return "\n".join(lines) if lines else "No matching log events found."
@@ -56,19 +48,14 @@ def k8s_get_pods(db: Session, group_ids: list[uuid.UUID], namespace: str) -> str
     if not scopes:
         return NOT_CONFIGURED_MSG.format(integration="EKS/kubectl")
 
-    from kubernetes import client as k8s_client
-    from kubernetes import config as k8s_config
+    from app.services.aws_session import get_k8s_client
 
+    default_region = get_settings().aws_region
     lines: list[str] = []
     for scope in scopes:
         cluster_name = scope.config.get("cluster_name", "unknown")
-        kubeconfig_path = scope.config.get("kubeconfig_path")
         try:
-            if kubeconfig_path:
-                k8s_config.load_kube_config(config_file=kubeconfig_path)
-            else:
-                k8s_config.load_incluster_config()
-            v1 = k8s_client.CoreV1Api()
+            v1 = get_k8s_client(scope.config, default_region=default_region)
             pods = v1.list_namespaced_pod(namespace=namespace)
             for pod in pods.items:
                 lines.append(f"[{cluster_name}] {pod.metadata.name}: {pod.status.phase}")

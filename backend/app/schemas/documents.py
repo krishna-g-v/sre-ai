@@ -18,6 +18,7 @@ class DocumentOut(BaseModel):
     tags: list[str]
     chunk_strategy: str
     best_effort_target_size: str | None
+    converted_to_markdown: bool
 
     class Config:
         from_attributes = True

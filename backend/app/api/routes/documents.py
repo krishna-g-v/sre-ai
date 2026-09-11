@@ -40,6 +40,9 @@ async def upload_document(
     tags: str = Form("[]"),  # JSON array of strings
     chunk_strategy: str = Form("whole_document"),  # "whole_document" | "best_effort"
     best_effort_target_size: str | None = Form(None),  # "small" | "medium" | "large"
+    convert_to_markdown: bool = Form(
+        False
+    ),  # LLM-rewrite non-md files to Markdown before ingesting
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> Document:
@@ -70,6 +73,7 @@ async def upload_document(
         tags=json.loads(tags),
         chunk_strategy=chunk_strategy,
         best_effort_target_size=best_effort_target_size,
+        convert_markdown=convert_to_markdown,
     )
     return document
 
