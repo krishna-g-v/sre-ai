@@ -33,7 +33,7 @@ from app.services.cli_executor import (
 )
 from app.services.llm import LLMAdapter
 from app.services.retrieval import retrieve
-from app.services.user_aws_accounts import accounts_for
+from app.services.user_aws_accounts import describe_known_accounts
 
 _DOC_CONTEXT_LIMIT = 3
 
@@ -158,16 +158,6 @@ def _describe_relevant_docs(
     )
 
 
-def _describe_known_resources(db: Session, user_id: uuid.UUID) -> str:
-    accounts = accounts_for(db, user_id)
-    if not accounts:
-        return "(no AWS accounts registered — tell the user to add one under Settings → AWS Accounts)"
-    return "\n".join(
-        f"- {a.label} (account {a.account_id or '?'}, region {a.region or '?'})"
-        for a in accounts
-    )
-
-
 def _extract_json(raw: str) -> dict:
     cleaned = raw.strip().strip("`")
     if cleaned.lower().startswith("json"):
@@ -231,7 +221,7 @@ def answer_with_generated_cli(
     isolation, per the user's explicit request (2026-09-11) that live-ops answers
     shouldn't skip documentation the way they previously did.
     """
-    resources = _describe_known_resources(db, user_id)
+    resources = describe_known_accounts(db, user_id)
     doc_context = _describe_relevant_docs(
         db,
         question,

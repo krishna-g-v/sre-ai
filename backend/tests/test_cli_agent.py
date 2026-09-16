@@ -35,7 +35,7 @@ def _llm(*responses):
 def _patches(run_readonly_aws_result="ok output"):
     return (
         patch("app.agents.cli_agent.get_similar_examples", return_value=[]),
-        patch("app.agents.cli_agent.accounts_for", return_value=[]),
+        patch("app.services.user_aws_accounts.accounts_for", return_value=[]),
         patch(
             "app.agents.cli_agent.run_readonly_aws",
             return_value=run_readonly_aws_result,
@@ -239,21 +239,21 @@ def test_works_without_history_argument():
 
 
 def test_known_resources_lists_registered_accounts():
-    from app.agents.cli_agent import _describe_known_resources
+    from app.services.user_aws_accounts import describe_known_accounts
 
     account = MagicMock(label="nonprod", account_id="111111111111", region="us-east-1")
-    with patch("app.agents.cli_agent.accounts_for", return_value=[account]):
-        description = _describe_known_resources(MagicMock(), MagicMock())
+    with patch("app.services.user_aws_accounts.accounts_for", return_value=[account]):
+        description = describe_known_accounts(MagicMock(), MagicMock())
 
     assert "nonprod" in description
     assert "111111111111" in description
 
 
 def test_known_resources_empty_when_no_accounts_registered():
-    from app.agents.cli_agent import _describe_known_resources
+    from app.services.user_aws_accounts import describe_known_accounts
 
-    with patch("app.agents.cli_agent.accounts_for", return_value=[]):
-        description = _describe_known_resources(MagicMock(), MagicMock())
+    with patch("app.services.user_aws_accounts.accounts_for", return_value=[]):
+        description = describe_known_accounts(MagicMock(), MagicMock())
 
     assert "Settings" in description
 
