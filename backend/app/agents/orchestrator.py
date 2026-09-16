@@ -14,6 +14,7 @@ context-free guess instead of using the pinned document or prior turns).
 """
 
 import json
+import re
 import uuid
 from typing import Literal, TypedDict
 
@@ -31,6 +32,13 @@ from app.agents.rag_agent import contextualized_search_query, run_rag
 from app.core.config import get_settings
 from app.services.llm import get_llm
 from app.services.retrieval import find_dominant_document, retrieve
+from app.services.topology_mermaid import to_mermaid
+from app.services.user_aws_accounts import describe_known_accounts
+from app.services.vpc_topology import (
+    TopologyResult,
+    describe_vpc_topology,
+    summarize_counts,
+)
 
 Category = Literal["general", "document_topic", "live_ops"]
 
@@ -92,6 +100,59 @@ Conversation so far:
 
 Newest message: {message}"""
 
+# docs/11-network-topology-visualization.md §3 — a small, dedicated classification call
+# ahead of the CLI generator in live_ops_node, not a keyword match (docs/11 §1's
+# "Routing" decision) and not a field folded into the CLI generator's own prompt (the
+# generator shouldn't need to know about a capability it never invokes itself — same
+# reasoning CLASSIFY_PROMPT/DRIFT_PROMPT above are two separate calls, not one).
+TOPOLOGY_CLASSIFY_PROMPT = """The user's message is already known to be about live AWS \
+infrastructure. Decide specifically whether it is a request to visualize/describe a VPC's \
+network topology as a whole — its subnets, gateways, VPC peering, Site-to-Site VPN, or \
+Transit Gateway attachments — as opposed to a narrower question about one specific resource \
+(e.g. "how many EBS volumes", "list EKS clusters", "show logs for X") that the existing AWS \
+CLI pipeline already handles well and should keep handling.
+
+Respond with ONLY a JSON object:
+{"is_topology": true, "vpc": "<vpc-id or Name tag, or empty string if not named>", "account_label": "<only if more than one AWS account is known, else omit>"}
+or
+{"is_topology": false}
+
+Use the conversation history to resolve "that VPC"/"it" to something named earlier, the same \
+way you would for any other follow-up. If no VPC is named anywhere in the conversation, leave \
+"vpc" as an empty string rather than guessing — the tool itself will ask the user to pick one \
+if the account has more than one VPC.
+
+Known AWS accounts for this user:
+{accounts}
+
+Conversation so far:
+{history}
+
+Newest message: {message}"""
+
+TOPOLOGY_SYNTHESIZE_SYSTEM_PROMPT = """You are an SRE Agent. Answer the engineer's question \
+about a VPC's network topology using the structured summary below.
+
+Do NOT include a ```mermaid code block, or any other diagram, anywhere in your response — \
+not even a small or partial one. A real diagram of the actual topology, generated separately \
+from the exact same data, is appended after your reply automatically. Your job is ONLY the \
+prose/Markdown answer (lists, bold) using the counts and facts given below — never attempt to \
+draw, sketch, or describe the diagram's shape yourself, and never invent node/resource names \
+that aren't in the summary.
+
+Be advisory only — never claim to have taken any action. If the summary notes anything that \
+could not be fully determined, say so plainly rather than guessing what it would have shown. \
+Directly address what the engineer actually asked (e.g. if they asked specifically about VPN \
+or peering, lead with that) rather than just restating every count generically."""
+
+# Defense in depth for the "don't draw a diagram yourself" instruction above: found live
+# (2026-09-15, real account 907986008762) that the model drew its own fabricated mermaid
+# block anyway despite the prompt — a prompt instruction alone wasn't enough, so this
+# strips any mermaid fence out of the narrative before the real, deterministically-
+# generated diagram is appended. Same principle as cli_validator.py being a hard gate
+# rather than a prompt instruction: nothing here trusts the LLM to have complied.
+_MERMAID_FENCE_RE = re.compile(r"```mermaid.*?```", re.DOTALL | re.IGNORECASE)
+
 # How many recent messages (user+assistant turns combined) to feed into every LLM call in
 # this module. Applied once where history enters the graph (app/api/routes/chat.py) — every
 # node here just uses whatever list it's given.
@@ -142,6 +203,51 @@ def _classify(llm, message: str, history: list[dict]) -> Category:
     return "general"
 
 
+def _classify_topology_intent(llm, message: str, history: list[dict], accounts_description: str) -> dict:
+    """{"is_topology": False} on any parse failure or an explicit "false" — same
+    fail-closed default as `_classify` above, so a malformed LLM response falls through
+    to the existing CLI-generator/fixed-tool flow rather than blocking it."""
+    prompt = (
+        TOPOLOGY_CLASSIFY_PROMPT.replace("{accounts}", accounts_description)
+        .replace("{history}", _format_history(history))
+        .replace("{message}", message)
+    )
+    raw = llm.chat([{"role": "user", "content": prompt}], temperature=0.0)
+    try:
+        parsed = json.loads(raw.strip().strip("`").removeprefix("json").strip())
+    except (json.JSONDecodeError, AttributeError):
+        return {"is_topology": False}
+    if not isinstance(parsed, dict) or not parsed.get("is_topology"):
+        return {"is_topology": False}
+    return {
+        "is_topology": True,
+        "vpc": parsed.get("vpc") or "",
+        "account_label": parsed.get("account_label") or None,
+    }
+
+
+def _synthesize_topology_answer(llm, message: str, history: list[dict], result: TopologyResult) -> str:
+    """The LLM only ever sees the mechanically-computed counts summary (`summarize_counts`)
+    as ground truth, never the raw AWS API responses — and the Mermaid diagram itself is
+    appended verbatim afterward, never generated or paraphrased by the model, so a diagram
+    syntax error or a hallucinated resource can't reach the user's screen.
+
+    The prompt tells the model not to draw a diagram itself, but that alone proved
+    insufficient live (see `_MERMAID_FENCE_RE`'s comment) — any mermaid fence the
+    narrative contains anyway is stripped here before the real one is appended, so a
+    non-compliant response degrades to "missing narrative content," never "two diagrams,
+    one of them fabricated."
+    """
+    messages = [
+        {"role": "system", "content": TOPOLOGY_SYNTHESIZE_SYSTEM_PROMPT},
+        *_history_messages(history),
+        {"role": "user", "content": f"Question: {message}\n\nTopology summary:\n{summarize_counts(result)}"},
+    ]
+    narrative = llm.chat(messages)
+    narrative = _MERMAID_FENCE_RE.sub("", narrative).strip()
+    return f"{narrative}\n\n```mermaid\n{to_mermaid(result)}\n```"
+
+
 def _check_drift(llm, pinned_title: str, message: str, history: list[dict]) -> tuple[bool, str]:
     prompt = (
         DRIFT_PROMPT.replace("{title}", pinned_title)
@@ -190,11 +296,33 @@ def build_orchestrator_graph(db: Session):
         return state
 
     def live_ops_node(state: OrchestratorState) -> OrchestratorState:
+        user_id = uuid.UUID(state["user_id"])
         group_ids = [uuid.UUID(g) for g in state["group_ids"]]
         message = state["query"]
+        history = state.get("history", [])
         lowered = message.lower()
 
-        # Always try the per-user CLI pipeline (docs/10 §9) first — unconditionally,
+        # docs/11-network-topology-visualization.md §3 — tried first, ahead of the CLI
+        # generator below: a topology question needs the multi-call boto3 tool
+        # (app/services/vpc_topology.py), not a single generated aws/kubectl command.
+        # LLM-classified, not a keyword match, per docs/11 §1's "Routing" decision.
+        accounts_description = describe_known_accounts(db, user_id)
+        topology_intent = _classify_topology_intent(llm, message, history, accounts_description)
+        if topology_intent["is_topology"]:
+            result = describe_vpc_topology(
+                db, user_id, vpc_identifier=topology_intent["vpc"], account_label=topology_intent["account_label"]
+            )
+            # A string result is already a direct, final answer (not-configured,
+            # ambiguous account/VPC, or an AssumeRole failure) — same convention
+            # `cli_executor.py`'s functions use, surfaced as-is rather than passed
+            # through an LLM that has nothing useful to add to it.
+            state["answer"] = (
+                result if isinstance(result, str) else _synthesize_topology_answer(llm, message, history, result)
+            )
+            state["retrieved_titles"] = []
+            return state
+
+        # Always try the per-user CLI pipeline (docs/10 §9) next — unconditionally,
         # not gated on keywords. This node is only ever reached once the classifier
         # has already decided the message is "live_ops" (see the conditional edges
         # below), so a second keyword filter here is both redundant and actively
@@ -208,10 +336,10 @@ def build_orchestrator_graph(db: Session):
         # §3) still benefits from them.
         generated_answer = answer_with_generated_cli(
             db,
-            uuid.UUID(state["user_id"]),
+            user_id,
             message,
             llm,
-            history=state.get("history", []),
+            history=history,
             group_ids=group_ids,
             is_superuser=state.get("is_superuser", False),
         )
@@ -252,7 +380,7 @@ def build_orchestrator_graph(db: Session):
                 "If tools report 'not configured', tell the user plainly. Format with Markdown "
                 "(lists, bold, code blocks) where it helps readability.",
             },
-            *_history_messages(state.get("history", [])),
+            *_history_messages(history),
             {"role": "user", "content": f"Question: {state['query']}\n\nTool output:\n{tool_output}"},
         ]
         state["answer"] = llm.chat(messages)

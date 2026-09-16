@@ -39,7 +39,7 @@ from app.services.cli_validator import (
     ParsedKubectlCommand,
     parse_and_validate,
 )
-from app.services.user_aws_accounts import accounts_for
+from app.services.user_aws_accounts import account_config, accounts_for, resolve_account
 
 _COMMAND_TIMEOUT_SECONDS = 20
 _OUTPUT_CHAR_LIMIT = 8000
@@ -63,38 +63,6 @@ _KUBECTL_STRIPPED_FLAGS = {
 NOT_CONFIGURED_MSG = "You don't have any AWS accounts registered yet — add one under Settings → AWS Accounts."
 
 
-def _account_config(account: UserAwsAccount) -> dict:
-    return {
-        "role_arn": account.role_arn,
-        "external_id": account.external_id or None,
-        "region": account.region,
-        # optional — falls back to the shared ambient base identity when unset,
-        # per aws_session.py's _base_session_kwargs (docs/10 §9)
-        "access_key_id": account.access_key_id or None,
-        "secret_access_key": account.secret_access_key or None,
-    }
-
-
-def _resolve_account(
-    accounts: list[UserAwsAccount], account_label: str | None
-) -> UserAwsAccount | str:
-    """The single account to run against, or an error string to return to the caller
-    directly. Ambiguity is never silently guessed at — with more than one account and
-    no label, this asks rather than picking one or fanning out across all of them
-    (fanning out was the old group-scoped behavior; it's wrong here, since a user's
-    "nonprod" and "prod" accounts must never both get queried for a question about one)."""
-    if account_label:
-        matched = [a for a in accounts if a.label == account_label]
-        if not matched:
-            configured = ", ".join(a.label for a in accounts)
-            return f"Rejected: no AWS account named '{account_label}' is registered. Configured: {configured}"
-        return matched[0]
-    if len(accounts) == 1:
-        return accounts[0]
-    configured = ", ".join(a.label for a in accounts)
-    return f"Multiple AWS accounts are registered: {configured}. Please specify which account."
-
-
 def _resolve_session(account: UserAwsAccount, region: str) -> "boto3.Session | str":
     """The assumed-role session for `account`, or an error string to return directly.
 
@@ -108,7 +76,7 @@ def _resolve_session(account: UserAwsAccount, region: str) -> "boto3.Session | s
     sts:AssumeRole propagated all the way up through FastAPI uncaught."""
     try:
         return aws_session.get_aws_session(
-            _account_config(account), default_region=region
+            account_config(account), default_region=region
         )
     except Exception as exc:  # pragma: no cover - depends on real AWS/network behavior
         return f"[{account.label}] ERROR: could not assume {account.role_arn}: {exc}"
@@ -178,7 +146,7 @@ def run_readonly_aws(
     default_region: str = "",
 ) -> str:
     """Validate and run an aws CLI command against exactly one of the requesting user's
-    own registered accounts (docs/10 §9). Returns CommandRejected's/`_resolve_account`'s
+    own registered accounts (docs/10 §9). Returns CommandRejected's/`user_aws_accounts.resolve_account`'s
     message directly (as a string) rather than raising, so callers (the generate/retry
     loop in app/agents/cli_agent.py) can feed it straight back to the LLM as the error
     to correct, same as any other execution failure."""
@@ -193,7 +161,7 @@ def run_readonly_aws(
     if not accounts:
         return NOT_CONFIGURED_MSG
 
-    resolved = _resolve_account(accounts, account_label)
+    resolved = resolve_account(accounts, account_label)
     if isinstance(resolved, str):
         return resolved
     account = resolved
@@ -275,7 +243,7 @@ def run_readonly_kubectl(
     if not accounts:
         return NOT_CONFIGURED_MSG
 
-    resolved = _resolve_account(accounts, account_label)
+    resolved = resolve_account(accounts, account_label)
     if isinstance(resolved, str):
         return resolved
     account = resolved

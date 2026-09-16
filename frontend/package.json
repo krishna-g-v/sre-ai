@@ -17,6 +17,7 @@
     "@mui/material": "^6.5.0",
     "express": "^4.22.2",
     "http-proxy-middleware": "^3.0.7",
+    "mermaid": "^11.17.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^9.1.0",

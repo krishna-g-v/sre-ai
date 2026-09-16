@@ -1,6 +1,7 @@
 import { Box, Link, Typography } from "@mui/material";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import MermaidDiagram from "./MermaidDiagram";
 
 interface Props {
   content: string;
@@ -70,6 +71,11 @@ function buildComponents(color?: string): Components {
     hr: () => <Box component="hr" sx={{ border: 0, borderTop: 1, borderColor: "divider", my: 1.5 }} />,
     code: ({ className, children, ...props }) => {
       const isBlock = /language-/.test(className ?? "");
+      // docs/11-network-topology-visualization.md §7/§8 — a ```mermaid fence (currently
+      // only emitted by VPC topology answers) renders as an actual diagram, not code.
+      if (isBlock && /language-mermaid/.test(className ?? "")) {
+        return <MermaidDiagram code={String(children).replace(/\n$/, "")} />;
+      }
       if (isBlock) {
         return (
           <Box
